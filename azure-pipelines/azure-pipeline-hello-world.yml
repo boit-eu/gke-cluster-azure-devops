@@ -1,0 +1,262 @@
+# Azure DevOps Test Pipeline - Deploy Hello World to GKE
+# This pipeline verifies the connection to GKE by deploying a simple hello-world chart
+
+trigger: none  # Manual trigger only for testing
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+# - group: 'gke-deployment-vars'  # Your variable group with GCP credentials
+- name: testNamespace
+  value: 'development'
+- name: releaseName
+  value: 'hello-world-test'
+
+stages:
+- stage: TestConnection
+  displayName: 'Test GKE Connection'
+  jobs:
+  - job: DeployHelloWorld
+    displayName: 'Deploy Hello World Chart'
+    steps:
+    
+    # Install required tools
+    - script: |
+        # Install gcloud CLI
+        curl https://sdk.cloud.google.com | bash
+        # exec -l $SHELL
+        
+        # Add gcloud to PATH
+        echo '##vso[task.prependpath]/home/vsts/google-cloud-sdk/bin'
+        
+        # Verify installation
+        gcloud --version
+        helm version
+        kubectl version --client
+      displayName: 'Install Tools'
+    
+    # Authenticate with GCP
+    - script: |
+        echo '$(GCP_SERVICE_ACCOUNT_KEY)' > /tmp/gcp-key.json
+        gcloud auth activate-service-account --key-file=/tmp/gcp-key.json
+        gcloud config set project $(GCP_PROJECT_ID)
+        echo "Authenticated with GCP project: $(GCP_PROJECT_ID)"
+      displayName: 'Authenticate with GCP'
+      env:
+        GCP_SERVICE_ACCOUNT_KEY: $(GCP_SERVICE_ACCOUNT_KEY)
+    
+    # Get GKE cluster credentials
+    - script: |
+        gcloud container clusters get-credentials $(GKE_CLUSTER_NAME) \
+          --region $(GKE_CLUSTER_REGION) \
+          --project $(GCP_PROJECT_ID)
+        echo "Connected to cluster: $(GKE_CLUSTER_NAME)"
+      displayName: 'Get GKE Credentials'
+    
+    # Verify cluster connection
+    - script: |
+        gcloud components install --quiet gke-gcloud-auth-plugin
+        kubectl cluster-info
+        kubectl get nodes
+        kubectl get namespaces
+      displayName: 'Verify Cluster Connection'
+    
+    # Configure kubectl to use service account
+    - script: |
+        # Set namespace context
+        kubectl config set-context --current --namespace=$(testNamespace)
+        
+        # Get service account token
+        SA_NAME="deploy-sa"
+        NAMESPACE="$(testNamespace)"
+        
+        echo "Configuring kubectl to use service account: $SA_NAME in namespace: $NAMESPACE"
+        
+        # Check if service account exists
+        if ! kubectl get serviceaccount $SA_NAME -n $NAMESPACE > /dev/null 2>&1; then
+          echo "ERROR: Service account $SA_NAME not found in namespace $NAMESPACE"
+          echo "Available service accounts:"
+          kubectl get serviceaccounts -n $NAMESPACE
+          exit 1
+        fi
+        
+        # For newer Kubernetes versions, create a token
+        if kubectl version --short | grep -q "v1.2[4-9]\|v1.[3-9]"; then
+          echo "Using token creation for newer Kubernetes version"
+          TOKEN=$(kubectl create token $SA_NAME -n $NAMESPACE --duration=3600s)
+        else
+          # For older versions, get token from secret
+          echo "Using secret-based token for older Kubernetes version"
+          SECRET_NAME=$(kubectl get serviceaccount $SA_NAME -n $NAMESPACE -o jsonpath='{.secrets[0].name}' 2>/dev/null || echo "")
+          if [ -n "$SECRET_NAME" ]; then
+            TOKEN=$(kubectl get secret $SECRET_NAME -n $NAMESPACE -o jsonpath='{.data.token}' | base64 -d)
+          else
+            # Fallback: create token even for older versions
+            TOKEN=$(kubectl create token $SA_NAME -n $NAMESPACE --duration=3600s 2>/dev/null || echo "")
+          fi
+        fi
+        
+        if [ -z "$TOKEN" ]; then
+          echo "ERROR: Could not obtain token for service account"
+          exit 1
+        fi
+        
+        # Configure kubectl with service account
+        kubectl config set-credentials $SA_NAME --token=$TOKEN
+        kubectl config set-context --current --user=$SA_NAME
+        
+        echo "Service account configured successfully"
+      displayName: 'Configure Service Account'
+    
+    # Test service account permissions
+    - script: |
+        echo "Testing service account permissions..."
+        
+        # Test basic permissions
+        kubectl auth can-i get pods -n $(testNamespace)
+        kubectl auth can-i create pods -n $(testNamespace)
+        kubectl auth can-i create services -n $(testNamespace)
+        kubectl auth can-i create deployments -n $(testNamespace)
+        
+        # List current resources
+        echo "Current pods in $(testNamespace):"
+        kubectl get pods -n $(testNamespace)
+        
+        echo "Current services in $(testNamespace):"
+        kubectl get services -n $(testNamespace)
+      displayName: 'Test Service Account Permissions'
+    
+    # Add Helm repository and update
+    - script: |
+        # Add the Helm examples repository
+        helm repo add helm-examples https://helm.github.io/examples
+        helm repo update
+        
+        # Search for hello-world chart
+        helm search repo hello-world
+      displayName: 'Add Helm Repository'
+    
+    # Deploy Hello World chart
+    - script: |
+        echo "Deploying Hello World chart..."
+        
+        helm upgrade --install $(releaseName) helm-examples/hello-world \
+          --namespace $(testNamespace) \
+          --create-namespace \
+          --set service.type=LoadBalancer \
+          --set service.port=80 \
+          --set replicaCount=2 \
+          --atomic \
+          --timeout 5m \
+          --wait
+        
+        echo "Deployment completed successfully!"
+      displayName: 'Deploy Hello World Chart'
+    
+    # Verify deployment
+    - script: |
+        echo "Verifying deployment..."
+        
+        # Check deployment status
+        kubectl get deployments -n $(testNamespace) -l app.kubernetes.io/instance=$(releaseName)
+        
+        # Check pods
+        kubectl get pods -n $(testNamespace) -l app.kubernetes.io/instance=$(releaseName)
+        
+        # Check services
+        kubectl get services -n $(testNamespace) -l app.kubernetes.io/instance=$(releaseName)
+        
+        # Get deployment details
+        kubectl describe deployment -n $(testNamespace) -l app.kubernetes.io/instance=$(releaseName)
+        
+        # Wait for pods to be ready
+        kubectl wait --for=condition=ready pod -n $(testNamespace) -l app.kubernetes.io/instance=$(releaseName) --timeout=300s
+        
+        echo "All pods are ready!"
+      displayName: 'Verify Deployment'
+    
+    # Show application logs
+    - script: |
+        echo "Application logs:"
+        kubectl logs -n $(testNamespace) -l app.kubernetes.io/instance=$(releaseName) --tail=50
+      displayName: 'Show Application Logs'
+    
+    # Get service information
+    - script: |
+        echo "Service information:"
+        kubectl get service -n $(testNamespace) -l app.kubernetes.io/instance=$(releaseName) -o wide
+        
+        # If LoadBalancer, show external IP (might take a few minutes)
+        echo "Waiting for LoadBalancer external IP..."
+        kubectl get service -n $(testNamespace) -l app.kubernetes.io/instance=$(releaseName) -w --timeout=60s || true
+        
+        echo "Final service status:"
+        kubectl get service -n $(testNamespace) -l app.kubernetes.io/instance=$(releaseName)
+      displayName: 'Get Service Information'
+    
+    # Test the application (optional)
+    - script: |
+        SERVICE_NAME=$(kubectl get service -n $(testNamespace) -l app.kubernetes.io/instance=$(releaseName) -o jsonpath='{.items[0].metadata.name}')
+        
+        if [ -n "$SERVICE_NAME" ]; then
+          echo "Testing application connectivity..."
+          
+          # Port forward to test the service
+          kubectl port-forward -n $(testNamespace) service/$SERVICE_NAME 8080:80 &
+          PF_PID=$!
+          
+          # Wait a moment for port forward to establish
+          sleep 5
+          
+          # Test the application
+          if curl -f http://localhost:8080 --max-time 10; then
+            echo "Application is responding correctly!"
+          else
+            echo "Application test failed, but deployment was successful"
+          fi
+          
+          # Clean up port forward
+          kill $PF_PID 2>/dev/null || true
+        fi
+      displayName: 'Test Application'
+      continueOnError: true
+    
+    # Show final status
+    - script: |
+        echo "=== FINAL DEPLOYMENT STATUS ==="
+        echo "Release: $(releaseName)"
+        echo "Namespace: $(testNamespace)"
+        echo ""
+        
+        echo "Helm releases:"
+        helm list -n $(testNamespace)
+        echo ""
+        
+        echo "Kubernetes resources:"
+        kubectl get all -n $(testNamespace) -l app.kubernetes.io/instance=$(releaseName)
+        echo ""
+        
+        echo "=== CONNECTION TEST COMPLETED SUCCESSFULLY ==="
+        echo "Your Azure DevOps pipeline can successfully:"
+        echo "✓ Authenticate with GCP"
+        echo "✓ Connect to GKE cluster"
+        echo "✓ Use Kubernetes service account"
+        echo "✓ Deploy Helm charts"
+        echo "✓ Manage Kubernetes resources"
+      displayName: 'Show Final Status'
+    
+    # Cleanup (optional - comment out if you want to keep the test deployment)
+    - script: |
+        echo "Cleaning up test deployment..."
+        helm uninstall $(releaseName) -n $(testNamespace) || true
+        echo "Cleanup completed"
+      displayName: 'Cleanup Test Deployment'
+      condition: and(succeeded(), eq(variables['CLEANUP_AFTER_TEST'], 'true'))
+    
+    # Always cleanup temporary files
+    - script: |
+        rm -f /tmp/gcp-key.json
+        echo "Temporary files cleaned up"
+      displayName: 'Cleanup Temporary Files'
+      condition: always()
