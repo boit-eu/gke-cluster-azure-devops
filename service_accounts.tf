@@ -59,52 +59,6 @@ resource "google_project_iam_member" "deploy_sa_permissions" {
   member  = "serviceAccount:${google_service_account.k8s_deploy_sa.email}"
 }
 
-# Create a role for pod deployment in the development namespace
-resource "kubernetes_role" "pod_deployer" {
-  metadata {
-    namespace = kubernetes_namespace.deployment_namespace.metadata[0].name
-    name      = "pod-deployer"
-  }
-
-  rule {
-    api_groups = [""]
-    resources  = ["pods", "services", "configmaps", "secrets"]
-    verbs      = ["get", "list", "watch", "create", "update", "patch", "delete"]
-  }
-
-  rule {
-    api_groups = ["apps"]
-    resources  = ["deployments", "replicasets"]
-    verbs      = ["get", "list", "watch", "create", "update", "patch", "delete"]
-  }
-
-  rule {
-    api_groups = [""]
-    resources  = ["services", "nodes", "namespaces"]
-    verbs      = ["get", "list", "watch"]
-  }
-}
-
-# Bind the role to the service account
-resource "kubernetes_role_binding" "pod_deployer_binding" {
-  metadata {
-    name      = "pod-deployer-binding"
-    namespace = kubernetes_namespace.deployment_namespace.metadata[0].name
-  }
-
-  role_ref {
-    api_group = "rbac.authorization.k8s.io"
-    kind      = "Role"
-    name      = kubernetes_role.pod_deployer.metadata[0].name
-  }
-
-  subject {
-    kind      = "ServiceAccount"
-    name      = kubernetes_service_account.deploy_sa.metadata[0].name
-    namespace = kubernetes_namespace.deployment_namespace.metadata[0].name
-  }
-}
-
 # Create ClusterRole with pod deployment permissions
 resource "kubernetes_cluster_role" "pod_deployer_cluster_role" {
   metadata {
