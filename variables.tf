@@ -23,5 +23,5 @@ variable "namespace" {
 variable "service_account_name" {
   description = "Name of the Kubernetes service account"
   type        = string
-  default     = "pod-deployer"
+  default     = "deploy-sa"
 }
