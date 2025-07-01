@@ -9,7 +9,7 @@ pool:
 variables:
 # - group: 'gke-deployment-vars'  # Your variable group with GCP credentials
 - name: testNamespace
-  value: 'development'
+  value: 'deployment'
 - name: releaseName
   value: 'hello-world-test'
 
@@ -68,7 +68,7 @@ stages:
         kubectl config set-context --current --namespace=$(testNamespace)
         
         # Get service account token
-        SA_NAME="deploy-sa"
+        SA_NAME="pod-deployer"
         NAMESPACE="$(testNamespace)"
         
         echo "Configuring kubectl to use service account: $SA_NAME in namespace: $NAMESPACE"

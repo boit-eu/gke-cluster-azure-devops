@@ -1,9 +1,9 @@
 # Create namespace if it doesn't exist (optional)
-resource "kubernetes_namespace" "deployment_namespace" {
-  metadata {
-    name = var.namespace
-  }
-}
+# resource "kubernetes_namespace" "deployment_namespace" {
+#   metadata {
+#     name = var.namespace
+#   }
+# }
 
 # Service account for GKE nodes
 resource "google_service_account" "gke_node_sa" {
@@ -32,7 +32,7 @@ resource "kubernetes_service_account" "deploy_sa" {
     }
   }
 
-  depends_on = [kubernetes_namespace.deployment_namespace]
+  # depends_on = [kubernetes_namespace.deployment_namespace]
 }
 
 # Bind Google Service Account to Kubernetes Service Account
@@ -41,7 +41,7 @@ resource "google_service_account_iam_binding" "workload_identity_binding" {
   role               = "roles/iam.workloadIdentityUser"
 
   members = [
-    "serviceAccount:${var.project_id}.svc.id.goog[${kubernetes_namespace.deployment_namespace.metadata[0].name}/${kubernetes_service_account.deploy_sa.metadata[0].name}]"
+    "serviceAccount:${var.project_id}.svc.id.goog[${var.namespace}/${kubernetes_service_account.deploy_sa.metadata[0].name}]"
   ]
 }
 

@@ -1,9 +1,9 @@
 # Outputs
 
-output "kubernetes_namespace" {
-  description = "Development namespace"
-  value       = kubernetes_namespace.deployment_namespace.metadata[0].name
-}
+# output "kubernetes_namespace" {
+#   description = "Development namespace"
+#   value       = kubernetes_namespace.deployment_namespace.metadata[0].name
+# }
 
 output "service_account_name" {
   description = "Kubernetes service account name"
